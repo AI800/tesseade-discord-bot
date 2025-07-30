@@ -2,12 +2,9 @@ import discord
 import requests
 import os
 
-# Test token validity
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 PHP_API_URL = os.getenv('PHP_API_URL')
 
-print(f"🔑 BOT_TOKEN length: {len(BOT_TOKEN) if BOT_TOKEN else 0}")
-print(f"🔑 BOT_TOKEN starts with: {BOT_TOKEN[:10] if BOT_TOKEN else 'None'}...")
 print(f"📡 PHP_API_URL: {PHP_API_URL}")
 
 intents = discord.Intents.default()
@@ -16,9 +13,7 @@ bot = discord.Client(intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot connected successfully as {bot.user}')
-    print(f'🔢 Bot ID: {bot.user.id}')
-    print(f'📊 Connected to {len(bot.guilds)} servers')
+    print(f'✅ Bot connected as {bot.user}')
 
 @bot.event
 async def on_message(message):
@@ -30,12 +25,6 @@ async def on_message(message):
         
     print(f"📨 Command: '{message.content}' from {message.author}")
     
-    # Simple test response first
-    if message.content == '!test':
-        await message.channel.send("🤖 Bot is working!")
-        return
-        
-    # API call for other commands
     data = {
         'user_id': str(message.author.id),
         'username': message.author.display_name,
@@ -44,26 +33,28 @@ async def on_message(message):
     
     try:
         response = requests.post(PHP_API_URL, json=data, timeout=10)
-        result = response.json()
+        print(f"📡 Status Code: {response.status_code}")
+        print(f"📡 Response Headers: {response.headers}")
+        print(f"📡 Raw Response: '{response.text}'")
         
-        if result.get('response'):
-            await message.channel.send(result['response'])
-        else:
-            await message.channel.send("❌ No response from server")
+        # Try to parse JSON
+        try:
+            result = response.json()
+            print(f"📡 Parsed JSON: {result}")
+            
+            if result.get('response'):
+                await message.channel.send(result['response'])
+            else:
+                await message.channel.send("❌ No response field")
+                
+        except Exception as json_error:
+            print(f"❌ JSON Parse Error: {json_error}")
+            print(f"❌ Raw response was: '{response.text[:200]}...'")
+            await message.channel.send(f"❌ JSON Error: {str(json_error)[:100]}")
             
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Request Error: {e}")
         await message.channel.send("❌ Connection error")
 
 if __name__ == "__main__":
-    if not BOT_TOKEN:
-        print("❌ BOT_TOKEN missing!")
-        exit(1)
-        
-    print("🚀 Attempting to login...")
-    try:
-        bot.run(BOT_TOKEN)
-    except discord.LoginFailure:
-        print("❌ LOGIN FAILURE - Invalid BOT_TOKEN!")
-    except Exception as e:
-        print(f"❌ Connection error: {e}")
+    bot.run(BOT_TOKEN)

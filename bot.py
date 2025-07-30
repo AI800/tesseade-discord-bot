@@ -5,8 +5,6 @@ import os
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 PHP_API_URL = os.getenv('PHP_API_URL')
 
-print(f"📡 PHP_API_URL: {PHP_API_URL}")
-
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
@@ -31,29 +29,42 @@ async def on_message(message):
         'command': message.content
     }
     
+    # Headers che simulano un browser normale
+    headers = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://tesseade.com/',
+        'Origin': 'https://tesseade.com'
+    }
+    
     try:
-        response = requests.post(PHP_API_URL, json=data, timeout=10)
-        print(f"📡 Status Code: {response.status_code}")
-        print(f"📡 Response Headers: {response.headers}")
-        print(f"📡 Raw Response: '{response.text}'")
+        response = requests.post(
+            PHP_API_URL, 
+            json=data, 
+            headers=headers,
+            timeout=15
+        )
         
-        # Try to parse JSON
-        try:
+        print(f"📡 Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
             result = response.json()
-            print(f"📡 Parsed JSON: {result}")
             
             if result.get('response'):
                 await message.channel.send(result['response'])
+                print("✅ Message sent successfully")
             else:
-                await message.channel.send("❌ No response field")
+                await message.channel.send("❌ No response from server")
+        else:
+            print(f"❌ Status: {response.status_code}")
+            print(f"❌ Response: {response.text}")
+            await message.channel.send("❌ Server error. Please try again later.")
                 
-        except Exception as json_error:
-            print(f"❌ JSON Parse Error: {json_error}")
-            print(f"❌ Raw response was: '{response.text[:200]}...'")
-            await message.channel.send(f"❌ JSON Error: {str(json_error)[:100]}")
-            
     except Exception as e:
-        print(f"❌ Request Error: {e}")
+        print(f"❌ Error: {e}")
         await message.channel.send("❌ Connection error")
 
 if __name__ == "__main__":

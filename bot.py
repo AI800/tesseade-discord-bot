@@ -22,9 +22,9 @@ async def on_ready():
     print(f'✅ Bot connected as {bot.user}')
     print(f'📡 API URL: {PHP_API_URL}')
     
-    # Start presence XP task
+    # Start presence XP task (15 minuti)
     bot.loop.create_task(presence_xp_loop())
-    print("⏰ Presence XP task started")
+    print("⏰ Presence XP task started (15 minute intervals)")
 
 @bot.event
 async def on_message(message):
@@ -41,7 +41,7 @@ async def on_message(message):
         'user_obj': message.author
     }
     
-    # Process message XP for every message
+    # Process message XP for every message (ma XP solo ogni 10 messaggi)
     await process_message_xp(user_id, username, message.channel)
     
     # Handle commands
@@ -96,14 +96,14 @@ async def on_presence_update(before, after):
 # === PRESENCE XP TASK ===
 
 async def presence_xp_loop():
-    """Background task that runs every 10 minutes"""
+    """Background task che gira ogni 15 minuti"""
     await bot.wait_until_ready()
-    print("⏰ Presence XP loop ready, waiting 10 minutes...")
+    print("⏰ Presence XP loop ready, waiting 15 minutes...")
     
     while not bot.is_closed():
         try:
-            await asyncio.sleep(600)  # Wait 10 minutes
-            print("⏰ Processing presence XP...")
+            await asyncio.sleep(900)  # Wait 15 minutes (era 600)
+            print("⏰ Processing presence XP (15 min interval)...")
             
             current_time = datetime.now()
             processed_count = 0
@@ -111,10 +111,10 @@ async def presence_xp_loop():
             # Process XP for active users
             for user_id, activity in list(user_activity.items()):
                 try:
-                    # If user was active in last 12 minutes, give presence XP
+                    # If user was active in last 17 minutes, give presence XP
                     time_since_activity = (current_time - activity['last_seen']).total_seconds()
                     
-                    if time_since_activity < 720:  # 12 minutes buffer
+                    if time_since_activity < 1020:  # 17 minutes buffer
                         result = await process_presence_xp(user_id, activity['username'])
                         processed_count += 1
                         
@@ -154,14 +154,18 @@ async def find_announcement_channel():
 # === XP PROCESSING FUNCTIONS ===
 
 async def process_message_xp(user_id, username, channel):
-    """Process XP from messages"""
+    """Process XP from messages (ogni 10 messaggi)"""
     result = await send_xp_request('message_xp', user_id, username)
     
-    if result and result.get('success') and result.get('level_up'):
-        await channel.send(f"🎉 **{username}** {result['message']}")
+    # Solo mostra messaggi per XP ottenuto o level up
+    if result and result.get('success'):
+        if result.get('level_up'):
+            await channel.send(f"🎉 **{username}** {result['message']}")
+        # Non mostrare messaggio per ogni XP normale, solo level up
+    # Non mostrare più "X messages remaining" per non spammare
 
 async def process_presence_xp(user_id, username):
-    """Process XP from presence"""
+    """Process XP from presence (ogni 15 minuti)"""
     return await send_xp_request('presence_xp', user_id, username)
 
 async def force_presence_xp(message):
@@ -178,7 +182,10 @@ async def force_presence_xp(message):
             else:
                 await message.channel.send(f"⏰ **Force Presence XP:** +{result.get('xp_gained', 0)} XP")
         elif result.get('type') == 'cooldown':
-            await message.channel.send(f"⏱️ Presence XP cooldown: {result.get('remaining', 0)}s remaining")
+            remaining_time = result.get('remaining', 0)
+            minutes = remaining_time // 60
+            seconds = remaining_time % 60
+            await message.channel.send(f"⏱️ Presence XP cooldown: {minutes}m {seconds}s remaining")
         else:
             await message.channel.send(f"❌ {result.get('error', 'Unknown error')}")
     else:

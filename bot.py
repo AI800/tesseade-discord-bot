@@ -25,6 +25,7 @@ async def on_ready():
     # Start presence XP task (15 minuti)
     bot.loop.create_task(presence_xp_loop())
     print("⏰ Presence XP task started (15 minute intervals)")
+    print("🎨 Auto-nickname system enabled")
 
 @bot.event
 async def on_message(message):
@@ -68,7 +69,17 @@ async def on_message(message):
         'command': message.content
     }
     
-    await send_to_api(data, message.channel, 'command')
+    result = await send_to_api(data, message.channel, 'command')
+    
+    # *** AGGIORNAMENTO AUTOMATICO NICKNAME ***
+    # Se il comando cambia la fazione, aggiorna il nickname automaticamente
+    if message.content.startswith('!join ') and result:
+        await asyncio.sleep(0.5)  # Aspetta che il database sia aggiornato
+        await update_user_nickname_auto(message.author)
+        
+    elif message.content == '!start':
+        await asyncio.sleep(0.5)
+        await update_user_nickname_auto(message.author)
 
 @bot.event
 async def on_member_update(before, after):
@@ -93,6 +104,88 @@ async def on_presence_update(before, after):
             'user_obj': after
         }
 
+# === AUTO NICKNAME MANAGEMENT ===
+
+async def update_user_nickname_auto(member):
+    """Aggiorna automaticamente il nickname dell'utente con la sua fazione"""
+    try:
+        user_id = str(member.id)
+        
+        # Ottieni dati utente dal database
+        user_data = await get_user_data(user_id)
+        if not user_data:
+            return
+        
+        # Ottieni il nickname base (senza emoji fazione)
+        current_nickname = member.display_name
+        base_nickname = remove_faction_emojis(current_nickname)
+        
+        # Se ha una fazione, aggiungi emoji
+        if user_data.get('faction_emoji'):
+            new_nickname = f"{user_data['faction_emoji']} {base_nickname}"
+        else:
+            new_nickname = base_nickname
+        
+        # Evita modifiche inutili
+        if current_nickname == new_nickname:
+            return
+        
+        # Prova a modificare il nickname
+        try:
+            await member.edit(nick=new_nickname[:32])  # Discord limit is 32 chars
+            faction_name = user_data.get('faction_display_name', 'No faction')
+            print(f"✅ Auto-updated nickname: {member} -> {new_nickname} ({faction_name})")
+            
+        except discord.Forbidden:
+            print(f"⚠️ No permission to change nickname for {member}")
+        except discord.HTTPException as e:
+            print(f"❌ Failed to update nickname for {member}: {str(e)}")
+                
+    except Exception as e:
+        print(f"❌ Error auto-updating nickname for {member}: {e}")
+
+def remove_faction_emojis(nickname):
+    """Rimuove emoji fazioni comuni dal nickname"""
+    faction_emojis = [
+        '🌸', '⚡', '🌊', '🔥', '🌿', '❄️', '🌙', '☀️', '⭐', '💎',
+        '🗡️', '🛡️', '🏹', '⚔️', '🔮', '📜', '🧙', '🐉', '🦅', '🐺',
+        '🏰', '⚖️', '🎭', '🌺', '🍃', '💫', '🔱', '👑', '🌟', '💀'
+    ]
+    
+    # Rimuovi emoji all'inizio del nickname
+    cleaned = nickname.strip()
+    for emoji in faction_emojis:
+        if cleaned.startswith(emoji):
+            cleaned = cleaned[len(emoji):].strip()
+            break
+    
+    return cleaned
+
+async def get_user_data(user_id):
+    """Ottieni dati utente dal database"""
+    try:
+        data = {
+            'user_id': user_id,
+            'action': 'get_user_data'
+        }
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (compatible; TesseadeBot/1.0)',
+        }
+        
+        url = PHP_API_URL.replace('discord.php', 'xp-handler.php')
+        response = requests.post(url, json=data, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result.get('user_data')
+        
+    except Exception as e:
+        print(f"❌ Error getting user data: {e}")
+        
+    return None
+
 # === PRESENCE XP TASK ===
 
 async def presence_xp_loop():
@@ -102,7 +195,7 @@ async def presence_xp_loop():
     
     while not bot.is_closed():
         try:
-            await asyncio.sleep(900)  # Wait 15 minutes (era 600)
+            await asyncio.sleep(900)  # Wait 15 minutes
             print("⏰ Processing presence XP (15 min interval)...")
             
             current_time = datetime.now()
@@ -161,8 +254,6 @@ async def process_message_xp(user_id, username, channel):
     if result and result.get('success'):
         if result.get('level_up'):
             await channel.send(f"🎉 **{username}** {result['message']}")
-        # Non mostrare messaggio per ogni XP normale, solo level up
-    # Non mostrare più "X messages remaining" per non spammare
 
 async def process_presence_xp(user_id, username):
     """Process XP from presence (ogni 15 minuti)"""
@@ -276,6 +367,7 @@ async def send_to_api(data, channel, request_type):
             
             if result.get('response'):
                 await channel.send(result['response'])
+                return result
             elif result.get('error'):
                 await channel.send(f"❌ {result['error']}")
         else:
@@ -284,6 +376,8 @@ async def send_to_api(data, channel, request_type):
     except Exception as e:
         print(f"❌ API Error: {e}")
         await channel.send("❌ Connection error")
+        
+    return None
 
 if __name__ == "__main__":
     bot.run(BOT_TOKEN)

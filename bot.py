@@ -73,11 +73,20 @@ async def on_message(message):
     
     await send_to_api(data, message.channel, 'command')
     
-    # *** NICKNAME UPDATE DOPO JOIN ***
-    if message.content.startswith('!join '):
-        print(f"🎨 Nickname update triggered for {message.author}")
+    # *** NICKNAME UPDATE TRIGGERS ***
+    # Update nickname when character elements change
+    nickname_triggers = [
+        '!join ',           # faction change
+        '!choose race ',    # race change  
+        '!choose spec',     # specialization change
+        '!nickname ',       # custom nickname change
+        '!nick '           # nickname alias
+    ]
+    
+    if any(message.content.startswith(trigger) for trigger in nickname_triggers):
+        print(f"🎨 Nickname update triggered by: {message.content}")
         await asyncio.sleep(1)  # Wait for database update
-        await update_nickname_after_join(message.author, message.channel)
+        await update_full_nickname(message.author, message.channel)
 
 @bot.event
 async def on_member_update(before, after):
@@ -102,50 +111,40 @@ async def on_presence_update(before, after):
             'user_obj': after
         }
 
-# === NICKNAME FUNCTIONS ===
+# === ENHANCED NICKNAME SYSTEM ===
 
-async def update_nickname_after_join(member, channel):
-    """Aggiorna nickname dopo join faction con debug"""
+async def update_full_nickname(member, channel):
+    """Aggiorna nickname completo: [faction][race][spec] CustomName"""
     try:
-        print(f"🔍 Getting faction data for {member}")
+        print(f"🔍 Getting full character data for {member}")
         
-        # Get user's faction from API
-        user_id = str(member.id)
-        faction_data = await get_user_faction_info(user_id)
-        
-        if not faction_data:
-            print(f"❌ No faction data found for {member}")
+        # Get complete character data
+        char_data = await get_character_data(str(member.id))
+        if not char_data:
+            print(f"❌ No character data found for {member}")
             return
-        
-        faction_emoji = faction_data.get('faction_emoji')
-        if not faction_emoji:
-            print(f"⚠️ User {member} has no faction emoji")
-            return
-        
-        print(f"✅ Found faction emoji: {faction_emoji} for {member}")
         
         # Check bot permissions
         if not member.guild.me.guild_permissions.manage_nicknames:
             print(f"❌ Bot has no 'Manage Nicknames' permission in {member.guild}")
-            await channel.send("⚠️ Bot needs 'Manage Nicknames' permission to show faction icons in usernames.")
             return
         
-        # Update nickname
+        # Build new nickname
+        new_nick = build_character_nickname(char_data)
         current_nick = member.display_name
-        clean_nick = remove_faction_emoji(current_nick)
-        new_nick = f"{faction_emoji} {clean_nick}"[:32]
         
         if current_nick == new_nick:
             print(f"✅ Nickname already correct for {member}: {new_nick}")
             return
         
         try:
-            await member.edit(nick=new_nick)
-            print(f"✅ Updated nickname: {member} -> {new_nick}")
+            await member.edit(nick=new_nick[:32])  # Discord limit
+            print(f"✅ Updated full nickname: {member} -> {new_nick}")
             
         except discord.Forbidden:
             print(f"❌ Permission denied changing nickname for {member}")
-            await channel.send("⚠️ Can't change your nickname. Make sure bot role is above your role in server settings.")
+            if member.id != member.guild.owner_id:  # Don't spam owner
+                await channel.send("⚠️ Can't change your nickname. Make sure bot role is above your role in server settings.")
             
         except discord.HTTPException as e:
             print(f"❌ Discord error for {member}: {e}")
@@ -153,14 +152,69 @@ async def update_nickname_after_join(member, channel):
     except Exception as e:
         print(f"❌ Error updating nickname for {member}: {e}")
 
-async def get_user_faction_info(user_id):
-    """Get user faction info from API"""
+def build_character_nickname(char_data):
+    """Build nickname from character data: [emojis] CustomName"""
+    emojis = []
+    
+    # Add faction emoji
+    if char_data.get('faction_emoji'):
+        emojis.append(char_data['faction_emoji'])
+    
+    # Add race emoji  
+    if char_data.get('race_emoji'):
+        emojis.append(char_data['race_emoji'])
+    
+    # Add specialization emoji
+    if char_data.get('spec_emoji'):
+        emojis.append(char_data['spec_emoji'])
+    
+    # Get display name (custom nickname or username)
+    display_name = char_data.get('custom_nickname') or char_data.get('username') or 'Unknown'
+    
+    # Clean display name of any existing emojis
+    clean_name = clean_all_emojis(display_name)
+    
+    # Build final nickname
+    if emojis:
+        return f"{''.join(emojis)} {clean_name}"
+    else:
+        return clean_name
+
+def clean_all_emojis(text):
+    """Remove all emojis from text"""
+    # Extended emoji list covering factions, races, specializations
+    all_emojis = [
+        # Factions
+        '🌸', '⚡', '🌊', '🔥', '🌿', '❄️', '🌙', '☀️', '⭐', '💎',
+        '🗡️', '🛡️', '🏹', '⚔️', '🔮', '📜', '🧙', '🐉', '🦅', '🐺',
+        '🏰', '⚖️', '🎭', '🌺', '🍃', '💫', '🔱', '👑', '🌟', '💀',
+        '👹', '🎃', '🌋', '🌪️', '⛈️', '🌈', '🦋', '🕷️', '🐍',
+        # Races  
+        '👤', '🧝', '🧔', '👺', '😈', '🧚', '🦸', '🧛', '🧞', '👽',
+        '🤖', '💀', '🐺', '🦅', '🐲', '🐯', '🦁', '🐻', '🦊', '🐱',
+        # Specializations
+        '⚔️', '🔮', '🏹', '🤝', '🗡️', '🛡️', '🔨', '🪓', '🏺', '📿',
+        '💊', '🎯', '🎪', '🎨', '🎭', '🎵', '📚', '🔬', '⚗️', '🔧'
+    ]
+    
+    cleaned = text.strip()
+    
+    # Remove emojis from start
+    while cleaned and any(cleaned.startswith(emoji) for emoji in all_emojis):
+        for emoji in all_emojis:
+            if cleaned.startswith(emoji):
+                cleaned = cleaned[len(emoji):].strip()
+                break
+    
+    return cleaned if cleaned else text
+
+async def get_character_data(user_id):
+    """Get complete character data from API"""
     try:
-        # Try using the existing get_stats API which should have faction info
+        # Use the existing get_user_data endpoint
         data = {
             'user_id': user_id,
-            'username': 'temp',
-            'action': 'get_stats'
+            'action': 'get_user_data'
         }
         
         headers = {
@@ -173,50 +227,21 @@ async def get_user_faction_info(user_id):
         
         if response.status_code == 200:
             result = response.json()
-            # Parse the response text to extract faction info
-            # This is a fallback method using existing API
+            return result.get('user_data')
+        else:
+            print(f"❌ API error getting character data: {response.status_code}")
             
-            # Try the get_user_data action instead
-            data['action'] = 'get_user_data'
-            response2 = requests.post(url, json=data, headers=headers, timeout=10)
-            
-            if response2.status_code == 200:
-                result2 = response2.json()
-                return result2.get('user_data')
-            
-            return None
-        
     except Exception as e:
-        print(f"❌ Error getting faction info: {e}")
+        print(f"❌ Error getting character data: {e}")
         
     return None
 
-def remove_faction_emoji(nickname):
-    """Remove existing faction emoji from nickname"""
-    # Comprehensive list of faction emojis
-    faction_emojis = [
-        '🌸', '⚡', '🌊', '🔥', '🌿', '❄️', '🌙', '☀️', '⭐', '💎',
-        '🗡️', '🛡️', '🏹', '⚔️', '🔮', '📜', '🧙', '🐉', '🦅', '🐺',
-        '🏰', '⚖️', '🎭', '🌺', '🍃', '💫', '🔱', '👑', '🌟', '💀',
-        '👹', '🎃', '🌋', '🌪️', '⛈️', '🌈', '🦋', '🕷️', '🐍', '🦅'
-    ]
-    
-    cleaned = nickname.strip()
-    
-    # Remove emoji if it starts with one
-    for emoji in faction_emojis:
-        if cleaned.startswith(emoji):
-            cleaned = cleaned[len(emoji):].strip()
-            break
-    
-    return cleaned if cleaned else nickname
-
 async def debug_nickname(message):
-    """Debug command per testare sistema nickname"""
+    """Debug command per testare sistema nickname completo"""
     member = message.author
     user_id = str(member.id)
     
-    response = f"🔧 **Nickname Debug for {member.mention}**\n\n"
+    response = f"🔧 **Full Nickname Debug for {member.mention}**\n\n"
     
     # Check permissions
     has_perms = member.guild.me.guild_permissions.manage_nicknames
@@ -224,25 +249,47 @@ async def debug_nickname(message):
     
     # Get current nickname
     current_nick = member.display_name
-    clean_nick = remove_faction_emoji(current_nick)
+    clean_nick = clean_all_emojis(current_nick)
     response += f"Current nickname: `{current_nick}`\n"
-    response += f"Clean nickname: `{clean_nick}`\n"
+    response += f"Clean nickname: `{clean_nick}`\n\n"
     
-    # Try to get faction data
-    faction_data = await get_user_faction_info(user_id)
-    if faction_data:
-        faction_name = faction_data.get('faction_display_name', 'Unknown')
-        faction_emoji = faction_data.get('faction_emoji', 'None')
-        response += f"Faction: {faction_name}\n"
-        response += f"Faction emoji: {faction_emoji}\n"
+    # Try to get character data
+    char_data = await get_character_data(user_id)
+    if char_data:
+        response += "**Character Data:**\n"
         
-        if faction_emoji and faction_emoji != 'None':
-            target_nick = f"{faction_emoji} {clean_nick}"
-            response += f"Target nickname: `{target_nick}`\n"
+        # Faction
+        if char_data.get('faction_display_name'):
+            response += f"Faction: {char_data.get('faction_emoji', '❌')} {char_data['faction_display_name']}\n"
         else:
-            response += "⚠️ No faction emoji found\n"
+            response += "Faction: ❌ Not chosen\n"
+            
+        # Race
+        if char_data.get('race_display_name'):
+            response += f"Race: {char_data.get('race_emoji', '❌')} {char_data['race_display_name']}\n"
+        else:
+            response += "Race: ❌ Not chosen\n"
+            
+        # Specialization
+        if char_data.get('spec_display_name'):
+            response += f"Specialization: {char_data.get('spec_emoji', '❌')} {char_data['spec_display_name']}\n"
+        else:
+            response += "Specialization: ❌ Not chosen\n"
+            
+        # Custom nickname
+        custom_nick = char_data.get('custom_nickname')
+        response += f"Custom nickname: {custom_nick if custom_nick else '❌ Not set'}\n\n"
+        
+        # Build target nickname
+        target_nick = build_character_nickname(char_data)
+        response += f"**Target nickname:** `{target_nick}`\n"
+        
+        if target_nick != current_nick:
+            response += "⚠️ Nickname needs update"
+        else:
+            response += "✅ Nickname is correct"
     else:
-        response += "❌ Could not get faction data from API\n"
+        response += "❌ Could not get character data from API"
     
     await message.channel.send(response)
 

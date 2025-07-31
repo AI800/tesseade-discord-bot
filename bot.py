@@ -22,15 +22,7 @@ async def on_ready():
     print(f'✅ Bot connected as {bot.user}')
     print(f'📡 API URL: {PHP_API_URL}')
     
-    # Check bot permissions
-    for guild in bot.guilds:
-        member = guild.get_member(bot.user.id)
-        if member and member.guild_permissions.manage_nicknames:
-            print(f"✅ Bot has 'Manage Nicknames' permission in {guild.name}")
-        else:
-            print(f"❌ Bot missing 'Manage Nicknames' permission in {guild.name}")
-    
-    # Start presence XP task
+    # Start presence XP task (15 minuti)
     bot.loop.create_task(presence_xp_loop())
     print("⏰ Presence XP task started (15 minute intervals)")
 
@@ -42,14 +34,14 @@ async def on_message(message):
     user_id = str(message.author.id)
     username = message.author.display_name
     
-    # Update user activity
+    # Update user activity (for presence tracking)
     user_activity[user_id] = {
         'username': username,
         'last_seen': datetime.now(),
         'user_obj': message.author
     }
     
-    # Process message XP
+    # Process message XP for every message (ma XP solo ogni 10 messaggi)
     await process_message_xp(user_id, username, message.channel)
     
     # Handle commands
@@ -59,6 +51,7 @@ async def on_message(message):
     print(f"📨 Command: '{message.content}' from {message.author}")
     
     if message.content == '!xp force':
+        # Force presence XP (for testing)
         await force_presence_xp(message)
         return
     elif message.content.startswith('!xp'):
@@ -66,10 +59,6 @@ async def on_message(message):
         return
     elif message.content == '!leaderboard':
         await handle_leaderboard_command(message)
-        return
-    elif message.content == '!test nickname':
-        # Test command per debug
-        await test_nickname_update(message)
         return
     
     # Regular game commands
@@ -79,18 +68,12 @@ async def on_message(message):
         'command': message.content
     }
     
-    # Send command to API
-    result = await send_to_api(data, message.channel, 'command')
+    await send_to_api(data, message.channel, 'command')
     
-    # *** NICKNAME UPDATE AUTOMATICO ***
-    if message.content.startswith('!join ') or message.content == '!start':
-        print(f"🎨 Attempting nickname update for {message.author}")
-        await asyncio.sleep(1)  # Wait for database
-        success = await update_nickname_from_db(message.author)
-        if success:
-            print(f"✅ Nickname updated for {message.author}")
-        else:
-            print(f"❌ Failed to update nickname for {message.author}")
+    # *** AGGIUNTA SEMPLICE PER NICKNAME ***
+    if message.content.startswith('!join '):
+        await asyncio.sleep(0.5)
+        await try_update_nickname(message.author)
 
 @bot.event
 async def on_member_update(before, after):
@@ -102,6 +85,7 @@ async def on_member_update(before, after):
             'last_seen': datetime.now(),
             'user_obj': after
         }
+        print(f"👋 {after.display_name} came online")
 
 @bot.event
 async def on_presence_update(before, after):
@@ -114,159 +98,76 @@ async def on_presence_update(before, after):
             'user_obj': after
         }
 
-# === NICKNAME FUNCTIONS ===
-
-async def update_nickname_from_db(member):
-    """Aggiorna nickname basandosi sui dati del database"""
+# === FUNZIONE NICKNAME SEMPLICE ===
+async def try_update_nickname(member):
+    """Prova ad aggiornare il nickname - se non funziona, pace"""
     try:
-        # Get user data from database
-        user_data = await get_user_faction_data(str(member.id))
-        if not user_data:
-            print(f"❌ No user data found for {member}")
-            return False
+        # Get faction emoji from database
+        user_id = str(member.id)
+        url = PHP_API_URL.replace('discord.php', 'xp-handler.php')
+        data = {'user_id': user_id, 'action': 'get_user_data'}
         
-        # Get base nickname (remove any existing faction emojis)
-        current_nick = member.display_name
-        base_nick = clean_nickname(current_nick)
-        
-        # Build new nickname
-        if user_data.get('faction_emoji'):
-            new_nick = f"{user_data['faction_emoji']} {base_nick}"
-        else:
-            new_nick = base_nick
-        
-        # Skip if already correct
-        if current_nick == new_nick:
-            print(f"✅ Nickname already correct for {member}")
-            return True
+        response = requests.post(url, json=data, timeout=5)
+        if response.status_code != 200:
+            return
+            
+        result = response.json()
+        user_data = result.get('user_data')
+        if not user_data or not user_data.get('faction_emoji'):
+            return
         
         # Update nickname
-        try:
-            await member.edit(nick=new_nick[:32])
-            print(f"✅ Updated {member}: '{current_nick}' -> '{new_nick}'")
-            return True
-            
-        except discord.Forbidden:
-            print(f"❌ No permission to change nickname for {member}")
-            return False
-        except discord.HTTPException as e:
-            print(f"❌ Discord error changing nickname for {member}: {e}")
-            return False
+        current_nick = member.display_name
+        emoji = user_data['faction_emoji']
+        
+        # Remove existing emoji if any
+        clean_nick = current_nick
+        if current_nick.startswith(('🌸', '⚡', '🌊', '🔥', '🌿', '❄️', '🌙', '☀️', '⭐', '💎', '🗡️', '🛡️', '🏹', '⚔️', '🔮')):
+            clean_nick = current_nick[2:].strip()
+        
+        new_nick = f"{emoji} {clean_nick}"[:32]
+        
+        if current_nick != new_nick:
+            await member.edit(nick=new_nick)
+            print(f"✅ Updated nickname: {member} -> {new_nick}")
             
     except Exception as e:
-        print(f"❌ Error updating nickname for {member}: {e}")
-        return False
-
-def clean_nickname(nickname):
-    """Remove faction emojis from nickname"""
-    # List of common faction emojis
-    emojis = ['🌸', '⚡', '🌊', '🔥', '🌿', '❄️', '🌙', '☀️', '⭐', '💎', 
-              '🗡️', '🛡️', '🏹', '⚔️', '🔮', '📜', '🧙', '🐉', '🦅', '🐺',
-              '🏰', '⚖️', '🎭', '🌺', '🍃', '💫', '🔱', '👑', '🌟', '💀']
-    
-    cleaned = nickname.strip()
-    
-    # Remove emoji if at start
-    for emoji in emojis:
-        if cleaned.startswith(emoji):
-            cleaned = cleaned[len(emoji):].strip()
-            break
-    
-    return cleaned if cleaned else nickname
-
-async def get_user_faction_data(user_id):
-    """Get user faction data from API"""
-    try:
-        url = PHP_API_URL.replace('discord.php', 'xp-handler.php')
-        data = {
-            'user_id': user_id,
-            'action': 'get_user_data'
-        }
-        
-        response = requests.post(url, json=data, timeout=10)
-        
-        if response.status_code == 200:
-            result = response.json()
-            return result.get('user_data')
-        else:
-            print(f"❌ API error getting user data: {response.status_code}")
-            
-    except Exception as e:
-        print(f"❌ Error getting user faction data: {e}")
-    
-    return None
-
-async def test_nickname_update(message):
-    """Test command per debug nickname system"""
-    member = message.author
-    print(f"🧪 Testing nickname update for {member}")
-    
-    # Check permissions
-    if not member.guild.me.guild_permissions.manage_nicknames:
-        await message.channel.send("❌ Bot missing 'Manage Nicknames' permission")
-        return
-    
-    # Get user data
-    user_data = await get_user_faction_data(str(member.id))
-    if not user_data:
-        await message.channel.send("❌ No user data found in database")
-        return
-    
-    current_nick = member.display_name
-    base_nick = clean_nickname(current_nick)
-    
-    response = f"🔧 **Nickname Test Debug:**\n"
-    response += f"Current nickname: `{current_nick}`\n"
-    response += f"Base nickname: `{base_nick}`\n"
-    response += f"Faction: {user_data.get('faction_display_name', 'None')}\n"
-    response += f"Faction emoji: {user_data.get('faction_emoji', 'None')}\n"
-    
-    if user_data.get('faction_emoji'):
-        new_nick = f"{user_data['faction_emoji']} {base_nick}"
-        response += f"Target nickname: `{new_nick}`\n\n"
-        
-        # Try to update
-        try:
-            await member.edit(nick=new_nick[:32])
-            response += "✅ Nickname updated successfully!"
-            
-        except discord.Forbidden:
-            response += "❌ No permission to change nickname"
-        except Exception as e:
-            response += f"❌ Error: {str(e)}"
-    else:
-        response += "\n⚠️ No faction selected, no emoji to add"
-    
-    await message.channel.send(response)
+        print(f"⚠️ Nickname update failed for {member}: {e}")
+        # Non fare niente, continua normalmente
 
 # === PRESENCE XP TASK ===
 
 async def presence_xp_loop():
-    """Background task ogni 15 minuti"""
+    """Background task che gira ogni 15 minuti"""
     await bot.wait_until_ready()
     print("⏰ Presence XP loop ready, waiting 15 minutes...")
     
     while not bot.is_closed():
         try:
-            await asyncio.sleep(900)  # 15 minutes
-            print("⏰ Processing presence XP...")
+            await asyncio.sleep(900)  # Wait 15 minutes
+            print("⏰ Processing presence XP (15 min interval)...")
             
             current_time = datetime.now()
             processed_count = 0
             
+            # Process XP for active users
             for user_id, activity in list(user_activity.items()):
                 try:
+                    # If user was active in last 17 minutes, give presence XP
                     time_since_activity = (current_time - activity['last_seen']).total_seconds()
                     
                     if time_since_activity < 1020:  # 17 minutes buffer
                         result = await process_presence_xp(user_id, activity['username'])
                         processed_count += 1
                         
+                        # If level up, announce it
                         if result and result.get('success') and result.get('level_up'):
+                            # Find a channel to announce
                             channel = await find_announcement_channel()
                             if channel:
                                 await channel.send(f"⏰ **{activity['username']}** {result['message']}")
                     
+                    # Clean old activity (older than 1 hour)
                     elif time_since_activity > 3600:
                         del user_activity[user_id]
                         
@@ -279,26 +180,32 @@ async def presence_xp_loop():
             print(f"❌ Presence XP loop error: {e}")
 
 async def find_announcement_channel():
-    """Find channel for announcements"""
+    """Find a suitable channel for announcements"""
     for guild in bot.guilds:
+        # Try to find 'general' channel
         channel = discord.utils.get(guild.text_channels, name='general')
         if channel:
             return channel
+        
+        # Otherwise use first available text channel
         if guild.text_channels:
             return guild.text_channels[0]
+    
     return None
 
-# === XP PROCESSING ===
+# === XP PROCESSING FUNCTIONS ===
 
 async def process_message_xp(user_id, username, channel):
-    """Process message XP"""
+    """Process XP from messages (ogni 10 messaggi)"""
     result = await send_xp_request('message_xp', user_id, username)
     
-    if result and result.get('success') and result.get('level_up'):
-        await channel.send(f"🎉 **{username}** {result['message']}")
+    # Solo mostra messaggi per XP ottenuto o level up
+    if result and result.get('success'):
+        if result.get('level_up'):
+            await channel.send(f"🎉 **{username}** {result['message']}")
 
 async def process_presence_xp(user_id, username):
-    """Process presence XP"""
+    """Process XP from presence (ogni 15 minuti)"""
     return await send_xp_request('presence_xp', user_id, username)
 
 async def force_presence_xp(message):
@@ -332,19 +239,30 @@ async def send_xp_request(action, user_id, username):
         'action': action
     }
     
+    headers = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (compatible; TesseadeBot/1.0)',
+    }
+    
     try:
         xp_url = PHP_API_URL.replace('discord.php', 'xp-handler.php')
-        response = requests.post(xp_url, json=data, timeout=10)
+        
+        response = requests.post(
+            xp_url,
+            json=data,
+            headers=headers,
+            timeout=10
+        )
         
         if response.status_code == 200:
             return response.json()
         else:
             print(f"❌ XP API Error {response.status_code}")
-        
+            return None
+            
     except Exception as e:
         print(f"❌ XP Request Error: {e}")
-        
-    return None
+        return None
 
 # === COMMAND HANDLERS ===
 
@@ -380,13 +298,18 @@ async def handle_leaderboard_command(message):
 
 async def send_to_api(data, channel, request_type):
     """Send request to PHP API"""
+    headers = {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (compatible; TesseadeBot/1.0)',
+    }
+    
     try:
         if request_type in ['xp_stats', 'xp_cooldown', 'leaderboard']:
             url = PHP_API_URL.replace('discord.php', 'xp-handler.php')
         else:
             url = PHP_API_URL
         
-        response = requests.post(url, json=data, timeout=15)
+        response = requests.post(url, json=data, headers=headers, timeout=15)
         
         if response.status_code == 200:
             result = response.json()
